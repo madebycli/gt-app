@@ -1,0 +1,246 @@
+name: Upstream GT6 Baseline Matrix
+
+on:
+  push:
+    branches:
+      - diagnostics/upstream-baselines
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-baseline:
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: 01-guess-the-num
+            repo: Explore-In-HMOS-Wearable/sportwatch-guess-the-num
+            ref: d215db7d6dc089cea37ced65cc1a501d20267868
+          - id: 02-tap-the-dot
+            repo: Explore-In-HMOS-Wearable/sportwatch-tap-the-dot-game
+            ref: dc8513d553c70b6a3c9b680165064f06e7918711
+          - id: 03-pong
+            repo: Explore-In-HMOS-Wearable/sportwatch-pong-game
+            ref: d71b1d85d4cfdabf1fcdd814a5a908c2b07748f0
+
+    steps:
+      - name: Checkout diagnostic harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout upstream app at exact commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: upstream
+
+      - name: Checkout upstream hapsigner implementation
+        uses: actions/checkout@v4
+        with:
+          repository: harmony-contrib/hapsigner-rs
+          ref: e8be862ec0998233ad6e90b70c4c4a7608249783
+          path: hapsigner-rs
+
+      - name: Verify source identity and do a small safety audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ACTUAL=$(git -C upstream rev-parse HEAD)
+          test "$ACTUAL" = "${{ matrix.ref }}"
+          {
+            echo "TEST=${{ matrix.id }}"
+            echo "UPSTREAM_REPOSITORY=${{ matrix.repo }}"
+            echo "UPSTREAM_COMMIT=$ACTUAL"
+            echo "HAPSIGNER_COMMIT=$(git -C hapsigner-rs rev-parse HEAD)"
+            echo
+            echo "== tracked source status before build =="
+            git -C upstream status --porcelain --untracked-files=no
+            echo
+            echo "== dependency declarations =="
+            cat upstream/oh-package.json5 2>/dev/null || true
+            echo
+            echo "== suspicious capability/network strings =="
+            grep -RInE 'reqPermissions|@system\.fetch|@ohos\.net|https?://|socket|geolocation|LOCATION|INTERNET' \
+              upstream/entry/src/main --exclude='*.map' || true
+          } | tee dist/00-${{ matrix.id }}-AUDIT.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev openssl
+
+      - name: Set up HarmonyOS command line tools
+        uses: ErBWs/setup-ohos@v2
+        with:
+          version: 6.0.0.858
+          cache: true
+
+      - name: Configure package registries
+        shell: bash
+        run: |
+          npm config set registry https://repo.huaweicloud.com/repository/npm/
+          npm config set @ohos:registry https://repo.harmonyos.com/npm/
+          ohpm config set registry https://ohpm.openharmony.cn/ohpm/
+
+      - name: Build exact upstream source without editing it
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ohpm install --all
+          (cd entry && ohpm install --all)
+          hvigorw clean --no-daemon
+          hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Collect untouched upstream outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BUNDLE=$(python3 - <<'PY'
+          import json
+          with open('upstream/entry/src/main/config.json', encoding='utf-8') as f:
+              print(json.load(f)['app']['bundleName'])
+          PY
+          )
+          RAW_BIN=$(find upstream/entry/build -type f -name '*unsigned*.bin' | head -n1 || true)
+          if [ -z "$RAW_BIN" ]; then
+            RAW_BIN=$(find upstream/entry/build -type f -name '*.bin' | head -n1 || true)
+          fi
+          test -n "$RAW_BIN"
+          cp "$RAW_BIN" "dist/01-${{ matrix.id }}-UPSTREAM-UNSIGNED.bin"
+          HAP=$(find upstream/entry/build -type f -name '*.hap' | head -n1 || true)
+          if [ -n "$HAP" ]; then
+            cp "$HAP" "dist/90-${{ matrix.id }}-UPSTREAM-BUILD.hap"
+          fi
+          {
+            echo "BUNDLE=$BUNDLE"
+            echo "RAW_BIN=$RAW_BIN"
+            printf 'RAW_BIN_MAGIC='
+            xxd -p -l 16 "$RAW_BIN"
+            echo "RAW_BIN_SHA256=$(sha256sum "$RAW_BIN" | awk '{print $1}')"
+            echo "RAW_BIN_SIZE=$(stat -c%s "$RAW_BIN")"
+          } | tee -a "dist/00-${{ matrix.id }}-AUDIT.txt"
+          echo "$BUNDLE" > dist/.bundle
+
+      - name: Build established open-source signer
+        working-directory: hapsigner-rs
+        shell: bash
+        run: cargo build --release --locked
+
+      - name: Create public development profile using upstream hapsigner
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE=$(cat dist/.bundle)
+          HAP=$(find upstream/entry/build -type f -name '*.hap' | head -n1 || true)
+          if [ -z "$HAP" ]; then
+            echo "No HAP produced, cannot derive the public development profile" | tee -a dist/00-${{ matrix.id }}-AUDIT.txt
+            exit 1
+          fi
+          hapsigner-rs/target/release/hap-sign sign "$HAP" \
+            --output dist/dev-profile-carrier-signed.hap \
+            --bundle-name "$BUNDLE" \
+            --device-id '*' \
+            --force
+          hapsigner-rs/target/release/hap-sign verify-app dist/dev-profile-carrier-signed.hap \
+            --out-cert-chain dist/dev-app-cert-chain.pem \
+            --out-profile dist/dev-profile.p7b
+
+      - name: Re-sign raw BIN with Huawei SDK hap-sign-tool.jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="dist/01-${{ matrix.id }}-UPSTREAM-UNSIGNED.bin"
+          SIGN_TOOL=$(find "${HOS_SDK_HOME}" -type f -name 'hap-sign-tool.jar' | head -n1)
+          test -f "$SIGN_TOOL"
+
+          openssl pkey -inform DER -in hapsigner-rs/src/assets/app-key.pk8 -out dist/dev-app-key.pem
+          openssl x509 -inform DER -in hapsigner-rs/src/assets/app-leaf.der -out dist/dev-app-leaf.pem
+          openssl x509 -inform DER -in hapsigner-rs/src/assets/app-ca.der -out dist/dev-app-ca.pem
+          openssl x509 -inform DER -in hapsigner-rs/src/assets/app-root.der -out dist/dev-app-root.pem
+          cat dist/dev-app-ca.pem dist/dev-app-root.pem > dist/dev-app-chain.pem
+          openssl pkcs12 -export \
+            -out dist/dev-app.p12 \
+            -inkey dist/dev-app-key.pem \
+            -in dist/dev-app-leaf.pem \
+            -certfile dist/dev-app-chain.pem \
+            -name devKey \
+            -passout pass:testpass
+
+          java -jar "$SIGN_TOOL" sign-app \
+            -mode localSign \
+            -profileFile dist/dev-profile.p7b \
+            -profileSigned 1 \
+            -inForm bin \
+            -signAlg SHA256withECDSA \
+            -keyAlias devKey \
+            -keystoreFile dist/dev-app.p12 \
+            -keystorePwd testpass \
+            -keyPwd testpass \
+            -appCertFile dist/dev-app-leaf.pem \
+            -inFile "$RAW" \
+            -outFile "dist/02-${{ matrix.id }}-HUAWEI-SIGNTOOL-PUBLIC-DEV.bin"
+
+          OUT="dist/02-${{ matrix.id }}-HUAWEI-SIGNTOOL-PUBLIC-DEV.bin"
+          test -s "$OUT"
+          python3 - "$OUT" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          b = p.read_bytes()
+          assert b[0] == 0xBE, f"expected Huawei BIN magic 0xBE, got {b[:1].hex()}"
+          assert b[-32:-16] == b'hw signed app   ', b[-32:].hex()
+          assert b[-16:-12] == b'1000', b[-32:].hex()
+          print('Huawei BIN + hw signed app footer verified')
+          PY
+          {
+            echo "HUAWEI_SIGN_TOOL=$SIGN_TOOL"
+            echo "SIGNED_BIN_SHA256=$(sha256sum "$OUT" | awk '{print $1}')"
+            echo "SIGNED_BIN_SIZE=$(stat -c%s "$OUT")"
+            echo "SIGNED_BIN_FOOTER=$(tail -c 32 "$OUT" | xxd -p -c 256)"
+            echo
+            echo "IMPORTANT: public OpenHarmony development identity, not Huawei retail trust."
+          } | tee -a "dist/00-${{ matrix.id }}-AUDIT.txt"
+
+      - name: Remove signing working material from downloadable artifact
+        if: always()
+        shell: bash
+        run: |
+          rm -f dist/.bundle \
+            dist/dev-profile-carrier-signed.hap \
+            dist/dev-app-key.pem \
+            dist/dev-app-leaf.pem \
+            dist/dev-app-ca.pem \
+            dist/dev-app-root.pem \
+            dist/dev-app-chain.pem \
+            dist/dev-app-cert-chain.pem \
+            dist/dev-profile.p7b \
+            dist/dev-app.p12
+
+      - name: Upload baseline package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}-baseline
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
