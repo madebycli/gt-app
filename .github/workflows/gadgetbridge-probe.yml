@@ -1,0 +1,137 @@
+name: Build Gadgetbridge GT6 Probe
+
+on:
+  push:
+    branches:
+      - diagnostics/gadgetbridge-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout diagnostic harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Checkout current Gadgetbridge upstream from Codeberg
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/Freeyourgadget/Gadgetbridge.git gadgetbridge
+          git -C gadgetbridge rev-parse HEAD | tee harness/GADGETBRIDGE-UPSTREAM-COMMIT.txt
+          git -C gadgetbridge status --short
+
+      - name: Apply minimal Huawei upload diagnostics
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('gadgetbridge')
+          async_files = list(root.rglob('AsynchronousResponse.java'))
+          upload_files = list(root.rglob('FileUpload.java'))
+          if len(async_files) != 1:
+              raise SystemExit(f'Expected exactly one AsynchronousResponse.java, found {async_files}')
+          if len(upload_files) != 1:
+              raise SystemExit(f'Expected exactly one FileUpload.java, found {upload_files}')
+
+          async_path = async_files[0]
+          upload_path = upload_files[0]
+
+          # Expose final upload status for the probe, if upstream still keeps it package-private.
+          s = upload_path.read_text(encoding='utf-8')
+          if 'public byte status = 0;' not in s:
+              if 'byte status = 0;' not in s:
+                  raise SystemExit('Could not locate FileUploadResult.Response status field')
+              s = s.replace('byte status = 0;', 'public byte status = 0;', 1)
+          upload_path.write_text(s, encoding='utf-8')
+
+          s = async_path.read_text(encoding='utf-8')
+
+          # Stage 1: the watch answers the initial file metadata request. 100000 (0x186A0) is success.
+          anchor = 'FileUpload.FileInfoSend.Response resp = (FileUpload.FileInfoSend.Response) response;'
+          if 'GT6_PROBE stage=FILE_INFO' not in s:
+              if anchor not in s:
+                  raise SystemExit('Could not locate FileInfoSend response handling')
+              inject = anchor + '''\n                    LOG.error("GT6_PROBE stage=FILE_INFO result={} hex=0x{}", resp.result, Integer.toHexString(resp.result));\n                    GB.toast("GT6 PROBE FILE_INFO=" + resp.result + " (0x" + Integer.toHexString(resp.result) + ")", Toast.LENGTH_LONG, resp.result == 100000 ? GB.INFO : GB.ERROR);'''
+              s = s.replace(anchor, inject, 1)
+
+          # Stage 2: the watch reports the final transfer/install result after all chunks were uploaded.
+          final_anchor = '} else if (response.commandId == FileUpload.FileUploadResult.id) {'
+          if 'GT6_PROBE stage=UPLOAD_RESULT' not in s:
+              if final_anchor not in s:
+                  raise SystemExit('Could not locate FileUploadResult handling')
+              final_inject = final_anchor + '''\n                if (response instanceof FileUpload.FileUploadResult.Response) {\n                    FileUpload.FileUploadResult.Response gt6ProbeResult = (FileUpload.FileUploadResult.Response) response;\n                    LOG.error("GT6_PROBE stage=UPLOAD_RESULT status={} hex=0x{}", gt6ProbeResult.status & 0xff, Integer.toHexString(gt6ProbeResult.status & 0xff));\n                    GB.toast("GT6 PROBE UPLOAD_RESULT=" + (gt6ProbeResult.status & 0xff) + " (0x" + Integer.toHexString(gt6ProbeResult.status & 0xff) + ")", Toast.LENGTH_LONG, gt6ProbeResult.status == 0 ? GB.INFO : GB.ERROR);\n                } else {\n                    LOG.error("GT6_PROBE stage=UPLOAD_RESULT unexpected_response_class={}", response.getClass().getName());\n                }'''
+              s = s.replace(final_anchor, final_inject, 1)
+
+          async_path.write_text(s, encoding='utf-8')
+
+          print(f'Patched {async_path}')
+          print(f'Patched {upload_path}')
+          PY
+
+          git -C gadgetbridge diff --check
+          git -C gadgetbridge diff | tee harness/GADGETBRIDGE-PROBE-PATCH.diff
+
+      - name: Verify patch scope
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CHANGED=$(git -C gadgetbridge diff --name-only)
+          printf '%s\n' "$CHANGED" | tee harness/GADGETBRIDGE-PROBE-CHANGED-FILES.txt
+          test "$(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l)" -eq 2
+          printf '%s\n' "$CHANGED" | grep -q 'AsynchronousResponse.java'
+          printf '%s\n' "$CHANGED" | grep -q 'FileUpload.java'
+
+      - name: Build upstream mainNopebble probe APK
+        working-directory: gadgetbridge
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleMainNopebble
+
+      - name: Collect APK and provenance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          APK=$(find gadgetbridge/app/build/outputs/apk -type f -name '*.apk' | grep -i 'main.*nopebble\|nopebble' | head -n1 || true)
+          if [ -z "$APK" ]; then
+            APK=$(find gadgetbridge/app/build/outputs/apk -type f -name '*.apk' | head -n1 || true)
+          fi
+          test -n "$APK"
+          cp "$APK" dist/Gadgetbridge-GT6-Probe.apk
+          cp harness/GADGETBRIDGE-UPSTREAM-COMMIT.txt dist/
+          cp harness/GADGETBRIDGE-PROBE-PATCH.diff dist/
+          cp harness/GADGETBRIDGE-PROBE-CHANGED-FILES.txt dist/
+          sha256sum dist/Gadgetbridge-GT6-Probe.apk | tee dist/SHA256SUMS.txt
+          {
+            echo 'Purpose: diagnose Huawei GT6 application upload refusal.'
+            echo 'Source: current Freeyourgadget/Gadgetbridge upstream cloned from Codeberg at build time.'
+            echo 'Patch scope: only Huawei FileUpload status visibility + user-visible diagnostic toasts.'
+            echo 'Build variant: mainNopebble, intended to coexist with a normal Gadgetbridge installation.'
+            echo 'No Watch app code is changed by this APK.'
+          } > dist/README-PROBE.txt
+
+      - name: Upload probe APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gadgetbridge-GT6-Probe
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
