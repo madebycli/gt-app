@@ -1,0 +1,8 @@
+[package]
+name = "gt6-bin-signer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hapsigner = { git = "https://github.com/harmony-contrib/hapsigner-rs", rev = "e8be862ec0998233ad6e90b70c4c4a7608249783", default-features = false, features = ["development"] }

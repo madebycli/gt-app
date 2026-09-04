@@ -23,6 +23,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/bin-signer
+
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -38,6 +46,8 @@ jobs:
         run: |
           set -euxo pipefail
           java -version
+          rustc --version
+          cargo --version
           node -v
           ohpm -v
           hvigorw -v
@@ -55,15 +65,24 @@ jobs:
           ohpm install --all
           (cd entry && ohpm install --all)
 
-      - name: Build Lite Wearable HAP
+      - name: Build Lite Wearable HAP and native BIN
         run: |
           set -euxo pipefail
           hvigorw clean --no-daemon
           hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
 
-      - name: Inspect and collect watch artifacts
-        if: always()
+      - name: Inspect and collect raw watch artifacts
         run: python3 tools/inspect_artifacts.py
+
+      - name: Sign Huawei BIN without Huawei developer account
+        run: |
+          set -euxo pipefail
+          test -f dist/gt6-test-unsigned.bin
+          cargo run --release --manifest-path tools/bin-signer/Cargo.toml -- \
+            dist/gt6-test-unsigned.bin \
+            dist/gt6-test-gadgetbridge.bin \
+            com.madebycli.gt6test
+          python3 tools/verify_signed_bin.py
 
       - name: Upload test build
         if: always()

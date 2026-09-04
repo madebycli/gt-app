@@ -22,8 +22,6 @@ def kind(path: Path) -> str:
         return "zip-hap"
     if head.startswith(b"\x7fELF"):
         return "elf"
-    if b"hw signed app" in head:
-        return "signed-bin-fragment"
     return "other"
 
 
@@ -48,7 +46,7 @@ bins = [row for row in rows if row[1] == "huawei-bin-0xBE"]
 if haps:
     shutil.copy2(haps[0][0], DIST / "gt6-test.hap")
 if bins:
-    shutil.copy2(bins[0][0], DIST / "gt6-test-gadgetbridge.bin")
+    shutil.copy2(bins[0][0], DIST / "gt6-test-unsigned.bin")
 else:
     (DIST / "NO_GADGETBRIDGE_BIN.txt").write_text(
         "The build completed but no file beginning with Huawei app magic 0xBE was found.\n"
@@ -74,7 +72,7 @@ else:
         ])
 
 if bins:
-    lines.append("RESULT: A native Huawei 0xBE app binary was found and copied to gt6-test-gadgetbridge.bin.")
+    lines.append("RESULT: A native Huawei 0xBE app binary was found and copied to gt6-test-unsigned.bin for signing.")
 else:
     lines.append("RESULT: No native Huawei 0xBE app binary was found in this build.")
 

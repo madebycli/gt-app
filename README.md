@@ -1,29 +1,32 @@
 # Huawei Watch GT 6 Test App
 
-Minimal Lite Wearable proof of concept for the Huawei Watch GT 6. The project is intentionally designed to build in GitHub Actions without a Huawei developer account.
+Minimal Lite Wearable proof of concept for the Huawei Watch GT 6. Build and packaging run in GitHub Actions without a Huawei developer account.
 
-## What the app does
+## What the app proves
 
-When it starts, the watch should show `GT6 TEST READY`. Tapping the button changes the message to `TOUCH OK` and increments a counter. This proves that the app launches and receives touch input.
+When it starts, the watch should show `GT6 TEST READY`. Tapping `TAP TEST` changes the message to `TOUCH OK` and increments the counter. This proves installation, launch, rendering and touch input.
 
-## Build
+## Automatic browser-only build
 
-Every push to `main` triggers **Build GT6 Test App** in GitHub Actions. You can also start it manually from the Actions tab.
+Every push to `main` triggers **Build GT6 Test App** in GitHub Actions. The workflow uses HarmonyOS 6.0 command-line tools, builds the Lite Wearable app, extracts the native Huawei `0xBE` BIN, signs it with the public OpenHarmony development identity and uploads everything as `gt6-test-build`.
 
-The workflow uploads an artifact named `gt6-test-build`. Download and unzip it on the Pixel 9.
+No Huawei Developer account, AppGallery Connect project or Huawei cloud credentials are used.
 
-The `dist/ARTIFACTS.txt` file explains what was produced:
+## Files in the GitHub Actions artifact
 
-- `gt6-test-gadgetbridge.bin`: preferred test file when the Huawei Lite Wearable build emits the `0xBE` binary format Gadgetbridge recognizes.
-- `gt6-test.hap`: original HAP output from Hvigor.
-- `NO_GADGETBRIDGE_BIN.txt`: present only when the build did not expose a `0xBE` application binary. In that case do not assume renaming the HAP to BIN will work.
+- `gt6-test-gadgetbridge.bin`: signed `0xBE` Huawei app, this is the first file to test with Gadgetbridge.
+- `gt6-test-unsigned.bin`: identical app before the experimental account-free signature, useful as fallback and diagnostics.
+- `gt6-test.hap`: normal HAP output from Hvigor.
+- `ARTIFACTS.txt`: detected formats, hashes and signing metadata.
 
-## Test on the watch
+## Test on Pixel 9 + Gadgetbridge
 
-1. Pair the GT 6 with Gadgetbridge on the Pixel 9.
-2. Download the latest `gt6-test-build` artifact from GitHub Actions.
-3. Read `ARTIFACTS.txt`.
-4. If `gt6-test-gadgetbridge.bin` exists, open it with Gadgetbridge and install it.
-5. If only `gt6-test.hap` exists, keep it for diagnostics and check the workflow output before trying further packaging.
+1. Open the latest successful **Build GT6 Test App** run in the GitHub Actions tab.
+2. Download the `gt6-test-build` artifact on the Pixel 9 and unzip it.
+3. Open `gt6-test-gadgetbridge.bin` with Gadgetbridge while the GT 6 is connected.
+4. Confirm the installation in Gadgetbridge.
+5. On the watch, open **GT6 Test**.
+6. Expected initial text: `GT6 TEST READY`.
+7. Tap **TAP TEST**. Expected text: `TOUCH OK`, with `Taps: 1`.
 
-No Huawei developer account, AppGallery Connect project, or Huawei cloud credentials are used by this repository.
+If the retail GT 6 rejects `gt6-test-gadgetbridge.bin`, record the exact Gadgetbridge/watch error. The file is structurally signed in Huawei's `hw signed app` BIN format, but the retail watch may reject the public OpenHarmony development certificate because that trust decision is device firmware policy.
