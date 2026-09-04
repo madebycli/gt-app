@@ -3,8 +3,8 @@
     "bundleName": "com.madebycli.gt6test",
     "vendor": "madebycli",
     "version": {
-      "code": 1000001,
-      "name": "1.0.1"
+      "code": 1000002,
+      "name": "1.0.2"
     }
   },
   "deviceConfig": {},
@@ -22,7 +22,7 @@
         "name": ".MainAbility",
         "srcLanguage": "js",
         "srcPath": "MainAbility",
-        "icon": "$media:icon",
+        "icon": "$media:icon_small",
         "description": "$string:MainAbility_desc",
         "label": "$string:MainAbility_label",
         "type": "page"
