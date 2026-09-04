@@ -34,7 +34,7 @@ jobs:
           git -C gadgetbridge rev-parse HEAD | tee harness/GADGETBRIDGE-UPSTREAM-COMMIT.txt
           git -C gadgetbridge status --short
 
-      - name: Apply minimal Huawei upload diagnostics
+      - name: Apply minimal Huawei upload diagnostics v2
         shell: bash
         run: |
           set -euxo pipefail
@@ -52,7 +52,7 @@ jobs:
           async_path = async_files[0]
           upload_path = upload_files[0]
 
-          # Expose final upload status for the probe, if upstream still keeps it package-private.
+          # Expose transport-end status to the probe if upstream keeps it package-private.
           s = upload_path.read_text(encoding='utf-8')
           if 'public byte status = 0;' not in s:
               if 'byte status = 0;' not in s:
@@ -62,7 +62,7 @@ jobs:
 
           s = async_path.read_text(encoding='utf-8')
 
-          # Stage 1: the watch answers the initial file metadata request. 100000 (0x186A0) is success.
+          # 0x28/0x02: watch accepts/rejects the file metadata and type.
           anchor = 'FileUpload.FileInfoSend.Response resp = (FileUpload.FileInfoSend.Response) response;'
           if 'GT6_PROBE stage=FILE_INFO' not in s:
               if anchor not in s:
@@ -70,13 +70,29 @@ jobs:
               inject = anchor + '''\n                    LOG.error("GT6_PROBE stage=FILE_INFO result={} hex=0x{}", resp.result, Integer.toHexString(resp.result));\n                    GB.toast("GT6 PROBE FILE_INFO=" + resp.result + " (0x" + Integer.toHexString(resp.result) + ")", Toast.LENGTH_LONG, resp.result == 100000 ? GB.INFO : GB.ERROR);'''
               s = s.replace(anchor, inject, 1)
 
-          # Stage 2: the watch reports the final transfer/install result after all chunks were uploaded.
+          # 0x28/0x07 is the transfer-end response. It is NOT the final app install result.
           final_anchor = '} else if (response.commandId == FileUpload.FileUploadResult.id) {'
-          if 'GT6_PROBE stage=UPLOAD_RESULT' not in s:
+          if 'GT6_PROBE stage=TRANSFER_RESULT' not in s:
               if final_anchor not in s:
                   raise SystemExit('Could not locate FileUploadResult handling')
-              final_inject = final_anchor + '''\n                if (response instanceof FileUpload.FileUploadResult.Response) {\n                    FileUpload.FileUploadResult.Response gt6ProbeResult = (FileUpload.FileUploadResult.Response) response;\n                    LOG.error("GT6_PROBE stage=UPLOAD_RESULT status={} hex=0x{}", gt6ProbeResult.status & 0xff, Integer.toHexString(gt6ProbeResult.status & 0xff));\n                    GB.toast("GT6 PROBE UPLOAD_RESULT=" + (gt6ProbeResult.status & 0xff) + " (0x" + Integer.toHexString(gt6ProbeResult.status & 0xff) + ")", Toast.LENGTH_LONG, gt6ProbeResult.status == 0 ? GB.INFO : GB.ERROR);\n                } else {\n                    LOG.error("GT6_PROBE stage=UPLOAD_RESULT unexpected_response_class={}", response.getClass().getName());\n                }'''
+              final_inject = final_anchor + '''\n                if (response instanceof FileUpload.FileUploadResult.Response) {\n                    FileUpload.FileUploadResult.Response gt6ProbeResult = (FileUpload.FileUploadResult.Response) response;\n                    LOG.error("GT6_PROBE stage=TRANSFER_RESULT status={} hex=0x{}", gt6ProbeResult.status & 0xff, Integer.toHexString(gt6ProbeResult.status & 0xff));\n                    GB.toast("GT6 PROBE TRANSFER_RESULT=" + (gt6ProbeResult.status & 0xff) + " (0x" + Integer.toHexString(gt6ProbeResult.status & 0xff) + ")", Toast.LENGTH_LONG, GB.INFO);\n                }'''
               s = s.replace(final_anchor, final_inject, 1)
+
+          # 0x28/0x08: explicit device-side upload error, if emitted.
+          device_anchor = 'FileUpload.FileUploadDeviceResponse.Response resp = (FileUpload.FileUploadDeviceResponse.Response) response;'
+          if 'GT6_PROBE stage=DEVICE_UPLOAD_ERROR' not in s:
+              if device_anchor not in s:
+                  raise SystemExit('Current upstream has no FileUploadDeviceResponse handler')
+              device_inject = device_anchor + '''\n                    LOG.error("GT6_PROBE stage=DEVICE_UPLOAD_ERROR fileId={} code={} hex=0x{}", resp.fileId & 0xff, resp.code, Integer.toHexString(resp.code));\n                    GB.toast("GT6 PROBE DEVICE_UPLOAD_ERROR=" + resp.code + " (0x" + Integer.toHexString(resp.code) + ")", Toast.LENGTH_LONG, GB.ERROR);'''
+              s = s.replace(device_anchor, device_inject, 1)
+
+          # 0x2a/0x02: the actual app unpack/install state. 101 start, 102 success, 103 failure.
+          app_anchor = 'App.AppInstallStatus.Response resp = (App.AppInstallStatus.Response) response;'
+          if 'GT6_PROBE stage=APP_INSTALL_STATUS' not in s:
+              if app_anchor not in s:
+                  raise SystemExit('Current upstream has no AppInstallStatus handler')
+              app_inject = app_anchor + '''\n                LOG.error("GT6_PROBE stage=APP_INSTALL_STATUS status={} package={}", resp.status, resp.packageName);\n                if (resp.status > App.AppInstallStatus.PROGRESS_MAX || resp.status == 0 || resp.status == 100) {\n                    GB.toast("GT6 PROBE APP_STATUS=" + resp.status + " pkg=" + resp.packageName, Toast.LENGTH_LONG,\n                            resp.status == App.AppInstallStatus.STATE_INSTALLED ? GB.INFO :\n                            (resp.status == App.AppInstallStatus.STATE_INSTALL_FAILED ? GB.ERROR : GB.INFO));\n                }'''
+              s = s.replace(app_anchor, app_inject, 1)
 
           async_path.write_text(s, encoding='utf-8')
 
@@ -115,15 +131,17 @@ jobs:
             APK=$(find gadgetbridge/app/build/outputs/apk -type f -name '*.apk' | head -n1 || true)
           fi
           test -n "$APK"
-          cp "$APK" dist/Gadgetbridge-GT6-Probe.apk
+          cp "$APK" dist/Gadgetbridge-GT6-Probe-v2.apk
           cp harness/GADGETBRIDGE-UPSTREAM-COMMIT.txt dist/
           cp harness/GADGETBRIDGE-PROBE-PATCH.diff dist/
           cp harness/GADGETBRIDGE-PROBE-CHANGED-FILES.txt dist/
-          sha256sum dist/Gadgetbridge-GT6-Probe.apk | tee dist/SHA256SUMS.txt
+          sha256sum dist/Gadgetbridge-GT6-Probe-v2.apk | tee dist/SHA256SUMS.txt
           {
-            echo 'Purpose: diagnose Huawei GT6 application upload refusal.'
+            echo 'Purpose: diagnose Huawei GT6 application upload and actual 0x2a app-install refusal.'
             echo 'Source: current Freeyourgadget/Gadgetbridge upstream cloned from Codeberg at build time.'
-            echo 'Patch scope: only Huawei FileUpload status visibility + user-visible diagnostic toasts.'
+            echo 'Patch scope: only Huawei FileUpload status visibility + AppInstallStatus diagnostic toasts.'
+            echo 'Probe stages: FILE_INFO, TRANSFER_RESULT, DEVICE_UPLOAD_ERROR, APP_INSTALL_STATUS.'
+            echo 'APP_STATUS 101=install started, 102=installed, 103=install failed.'
             echo 'Build variant: mainNopebble, intended to coexist with a normal Gadgetbridge installation.'
             echo 'No Watch app code is changed by this APK.'
           } > dist/README-PROBE.txt
@@ -131,7 +149,7 @@ jobs:
       - name: Upload probe APK
         uses: actions/upload-artifact@v4
         with:
-          name: Gadgetbridge-GT6-Probe
+          name: Gadgetbridge-GT6-Probe-v2
           path: dist/
           if-no-files-found: error
           retention-days: 14
