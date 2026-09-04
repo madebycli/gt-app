@@ -1,0 +1,52 @@
+.container {
+  width: 466px;
+  height: 466px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: #000000;
+}
+
+.title {
+  width: 360px;
+  height: 58px;
+  font-size: 34px;
+  color: #00ff88;
+  text-align: center;
+}
+
+.subtitle {
+  width: 320px;
+  height: 42px;
+  font-size: 22px;
+  color: #ffffff;
+  text-align: center;
+}
+
+.testButton {
+  width: 230px;
+  height: 64px;
+  margin-top: 18px;
+  font-size: 25px;
+  color: #000000;
+  background-color: #ffffff;
+}
+
+.counter {
+  width: 260px;
+  height: 44px;
+  margin-top: 16px;
+  font-size: 24px;
+  color: #ffffff;
+  text-align: center;
+}
+
+.version {
+  width: 310px;
+  height: 30px;
+  margin-top: 10px;
+  font-size: 15px;
+  color: #999999;
+  text-align: center;
+}

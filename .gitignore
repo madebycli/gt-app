@@ -1,0 +1,8 @@
+.idea/
+node_modules/
+oh_modules/
+**/build/
+.hvigor/
+local.properties
+dist/
+*.log

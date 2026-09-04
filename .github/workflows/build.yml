@@ -1,0 +1,74 @@
+name: Build GT6 Test App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev
+
+      - name: Set up HarmonyOS command line tools
+        uses: ErBWs/setup-ohos@v2
+        with:
+          cache: true
+
+      - name: Show toolchain versions
+        run: |
+          set -euxo pipefail
+          java -version
+          node -v
+          ohpm -v
+          hvigorw -v
+          echo "HOS_SDK_HOME=${HOS_SDK_HOME:-<unset>}"
+
+      - name: Configure package registries
+        run: |
+          npm config set registry https://repo.huaweicloud.com/repository/npm/
+          npm config set @ohos:registry https://repo.harmonyos.com/npm/
+          ohpm config set registry https://ohpm.openharmony.cn/ohpm/
+
+      - name: Install project dependencies
+        run: |
+          set -euxo pipefail
+          ohpm install --all
+          (cd entry && ohpm install --all)
+
+      - name: Build Lite Wearable HAP
+        run: |
+          set -euxo pipefail
+          hvigorw clean --no-daemon
+          hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+
+      - name: Inspect and collect watch artifacts
+        if: always()
+        run: python3 tools/inspect_artifacts.py
+
+      - name: Upload test build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gt6-test-build
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

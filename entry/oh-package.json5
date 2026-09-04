@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "GT6 test entry module",
+  "main": "",
+  "author": "madebycli",
+  "license": "MIT",
+  "dependencies": {}
+}

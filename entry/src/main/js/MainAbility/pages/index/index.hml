@@ -1,0 +1,7 @@
+<div class="container">
+  <text class="title">{{status}}</text>
+  <text class="subtitle">Huawei Watch GT 6</text>
+  <input class="testButton" type="button" value="TAP TEST" onclick="clickAction"></input>
+  <text class="counter">Taps: {{count}}</text>
+  <text class="version">Browser-built test v1.0.0</text>
+</div>

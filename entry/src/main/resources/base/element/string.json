@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "GT6 Lite Wearable test module"
+    },
+    {
+      "name": "MainAbility_desc",
+      "value": "Huawei Watch GT6 installation and touch test"
+    },
+    {
+      "name": "MainAbility_label",
+      "value": "GT6 Test"
+    }
+  ]
+}
