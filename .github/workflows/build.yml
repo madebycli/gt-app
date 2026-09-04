@@ -31,6 +31,7 @@ jobs:
       - name: Set up HarmonyOS command line tools
         uses: ErBWs/setup-ohos@v2
         with:
+          version: 6.0.0.858
           cache: true
 
       - name: Show toolchain versions
