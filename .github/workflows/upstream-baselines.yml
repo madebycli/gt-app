@@ -178,6 +178,7 @@ jobs:
           openssl x509 -inform DER -in hapsigner-rs/src/assets/app-leaf.der -out dist/dev-app-leaf.pem
           openssl x509 -inform DER -in hapsigner-rs/src/assets/app-ca.der -out dist/dev-app-ca.pem
           openssl x509 -inform DER -in hapsigner-rs/src/assets/app-root.der -out dist/dev-app-root.pem
+          cat dist/dev-app-leaf.pem dist/dev-app-ca.pem dist/dev-app-root.pem > dist/dev-app-fullchain.pem
           cat dist/dev-app-ca.pem dist/dev-app-root.pem > dist/dev-app-chain.pem
           openssl pkcs12 -export \
             -out dist/dev-app.p12 \
@@ -197,7 +198,7 @@ jobs:
             -keystoreFile dist/dev-app.p12 \
             -keystorePwd testpass \
             -keyPwd testpass \
-            -appCertFile dist/dev-app-leaf.pem \
+            -appCertFile dist/dev-app-fullchain.pem \
             -inFile "$RAW" \
             -outFile "dist/02-${{ matrix.id }}-HUAWEI-SIGNTOOL-PUBLIC-DEV.bin"
 
@@ -232,6 +233,7 @@ jobs:
             dist/dev-app-ca.pem \
             dist/dev-app-root.pem \
             dist/dev-app-chain.pem \
+            dist/dev-app-fullchain.pem \
             dist/dev-app-cert-chain.pem \
             dist/dev-profile.p7b \
             dist/dev-app.p12
